@@ -52,9 +52,16 @@ type Config struct {
 
 // Server is reponsible for accepting connections and handling
 // the details of the SOCKS5 protocol
+//type Server struct {
+//	config      *Config
+//	authMethods map[uint8]Authenticator
+//}
+
+// Server represents the SOCKS5 server with added functionality
 type Server struct {
-	config      *Config
-	authMethods map[uint8]Authenticator
+	config       *Config
+	authMethods  map[uint8]Authenticator
+	ipWhitelist  map[string]struct{} // Store whitelisted IPs as a map for efficient lookup
 }
 
 // New creates a new Server and potentially returns an error
@@ -117,6 +124,7 @@ func (s *Server) Serve(l net.Listener) error {
 	return nil
 }
 
+/*
 // ServeConn is used to serve a single connection.
 func (s *Server) ServeConn(conn net.Conn) error {
 	defer conn.Close()
@@ -166,15 +174,9 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	}
 
 	return nil
-}
+}*/
 
 
-// Server represents the SOCKS5 server with added functionality
-type Server struct {
-	config       *Config
-	authMethods  map[uint8]Authenticator
-	ipWhitelist  map[string]struct{} // Store whitelisted IPs as a map for efficient lookup
-}
 
 // SetIPWhitelist sets the list of allowed IPs for the server
 func (s *Server) SetIPWhitelist(ips []net.IP) {
@@ -208,13 +210,12 @@ func (s *Server) ServeConn(conn net.Conn) error {
 		s.config.Logger.Printf("[WARN] Unauthorized IP: %v", clientAddr.IP)
 		return fmt.Errorf("Unauthorized IP: %v", clientAddr.IP)
 	}
-
 	bufConn := bufio.NewReader(conn)
 
 	// Read the version byte
 	version := []byte{0}
 	if _, err := bufConn.Read(version); err != nil {
-		s.config.Logger.Printf("[ERR] Failed to get version byte: %v", err)
+		s.config.Logger.Printf("[ERR] socks: Failed to get version byte: %v", err)
 		return err
 	}
 
