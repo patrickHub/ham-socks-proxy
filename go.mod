@@ -1,4 +1,4 @@
-module github.com/serjs/socks5-server
+module github.com/patrickHub/ham-socks-proxy
 
 go 1.19
 
