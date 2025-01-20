@@ -167,3 +167,93 @@ func (s *Server) ServeConn(conn net.Conn) error {
 
 	return nil
 }
+
+
+// Server represents the SOCKS5 server with added functionality
+type Server struct {
+	config       *Config
+	authMethods  map[uint8]Authenticator
+	ipWhitelist  map[string]struct{} // Store whitelisted IPs as a map for efficient lookup
+}
+
+// SetIPWhitelist sets the list of allowed IPs for the server
+func (s *Server) SetIPWhitelist(ips []net.IP) {
+	s.ipWhitelist = make(map[string]struct{})
+	for _, ip := range ips {
+		s.ipWhitelist[ip.String()] = struct{}{}
+	}
+	s.config.Logger.Printf("[INFO] Whitelist configured: %v", ips)
+}
+
+// isAllowedIP checks if the client's IP is in the whitelist
+func (s *Server) isAllowedIP(clientIP net.IP) bool {
+	if len(s.ipWhitelist) == 0 {
+		// No whitelist configured, allow all
+		return true
+	}
+	_, allowed := s.ipWhitelist[clientIP.String()]
+	return allowed
+}
+
+// Modified ServeConn method to include IP filtering
+func (s *Server) ServeConn(conn net.Conn) error {
+	defer conn.Close()
+	clientAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		return fmt.Errorf("Failed to parse client address")
+	}
+
+	// Check if the client IP is allowed
+	if !s.isAllowedIP(clientAddr.IP) {
+		s.config.Logger.Printf("[WARN] Unauthorized IP: %v", clientAddr.IP)
+		return fmt.Errorf("Unauthorized IP: %v", clientAddr.IP)
+	}
+
+	bufConn := bufio.NewReader(conn)
+
+	// Read the version byte
+	version := []byte{0}
+	if _, err := bufConn.Read(version); err != nil {
+		s.config.Logger.Printf("[ERR] Failed to get version byte: %v", err)
+		return err
+	}
+
+	// Ensure we are compatible
+	if version[0] != socks5Version {
+		err := fmt.Errorf("Unsupported SOCKS version: %v", version)
+		s.config.Logger.Printf("[ERR] socks: %v", err)
+		return err
+	}
+
+	// Authenticate the connection
+	authContext, err := s.authenticate(conn, bufConn)
+	if err != nil {
+		err = fmt.Errorf("Failed to authenticate: %v", err)
+		s.config.Logger.Printf("[ERR] socks: %v", err)
+		return err
+	}
+
+	request, err := NewRequest(bufConn)
+	if err != nil {
+		if err == unrecognizedAddrType {
+			if err := sendReply(conn, addrTypeNotSupported, nil); err != nil {
+				return fmt.Errorf("Failed to send reply: %v", err)
+			}
+		}
+		return fmt.Errorf("Failed to read destination address: %v", err)
+	}
+	request.AuthContext = authContext
+	if client, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		request.RemoteAddr = &AddrSpec{IP: client.IP, Port: client.Port}
+	}
+
+	// Process the client request
+	if err := s.handleRequest(request, conn); err != nil {
+		err = fmt.Errorf("Failed to handle request: %v", err)
+		s.config.Logger.Printf("[ERR] socks: %v", err)
+		return err
+	}
+
+	return nil
+}
+
